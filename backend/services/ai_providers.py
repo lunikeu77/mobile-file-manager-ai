@@ -93,6 +93,14 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         raise SpecValidationError(f"AI response was not valid JSON: {exc}") from exc
 
 
+def _is_paid_model(provider_id: str, model_id: str) -> bool:
+    if provider_id in {"openai", "kimi"}:
+        return True
+    if provider_id == "openrouter":
+        return not (model_id == "openrouter/free" or model_id.endswith(":free"))
+    return False
+
+
 class AIProviderAdapter(ABC):
     provider_id: str
 
@@ -786,9 +794,7 @@ class AIRouter:
                 if (preferred_model and preferred_provider == pid)
                 else prov["model_id"]
             )
-            is_paid_provider = pid in {"openai", "kimi"} or (
-                pid == "openrouter" and not str(model_id).endswith(":free")
-            )
+            is_paid_provider = _is_paid_model(pid, str(model_id))
 
             if free_only_global and is_paid_provider:
                 failover_chain.append({"provider_id": pid, "skipped": "free_only_mode_enabled"})
@@ -916,12 +922,10 @@ class AIRouter:
 
         prefs = await self.db.get_preferences()
         free_only_global = prefs.get("ai_free_only_mode", "false") == "true"
-        is_paid = provider_id in {"openai", "kimi"} or (
-            provider_id == "openrouter" and not eff_model.endswith(":free")
-        )
+        is_paid = _is_paid_model(provider_id, eff_model)
         if free_only_global and is_paid:
             raise SpecValidationError(
-                f"무료 전용 모드가 활성화되어 유료 모델({provider_id}/{eff_model}) 호출이 차단되었습니다."
+                f"무료 전용 모드가 활성화되어 유료 모델({provider_id}/{eff_model}) 호출이 차단되었습니다. [개인정보·보안]에서 '무료 공급자 전용 모드'를 끄면 사용할 수 있습니다."
             )
 
         correlation_id = f"chat_{uuid.uuid4().hex[:12]}"
