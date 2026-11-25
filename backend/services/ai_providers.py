@@ -939,11 +939,22 @@ class AIRouter:
             }
         ]
         if include_file_context:
-            ctx, _ = await self._build_sanitized_context("local", prefs)
+            ctx, _ = await self._build_sanitized_context("all", prefs)
+            send_names = prefs.get("ai_send_filenames", "false") == "true"
+            privacy_note = (
+                ""
+                if send_names
+                else " Real filenames are masked as [redacted_file_N] by privacy settings; inform the user they can enable filename sharing in [개인정보·보안]."
+            )
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Current workspace file metadata: {json.dumps(ctx[:20], ensure_ascii=False)}",
+                    "content": (
+                        f"Current workspace & cached Google Drive files (count={len(ctx)}): "
+                        f"{json.dumps(ctx[:30], ensure_ascii=False)}. "
+                        f"If count is 0, clearly tell the user there are currently 0 files in the workspace. "
+                        f"Do NOT claim you cannot access the local filesystem; answer directly from this metadata list.{privacy_note}"
+                    ),
                 }
             )
         for h in (history or [])[-12:]:

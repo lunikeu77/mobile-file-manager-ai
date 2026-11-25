@@ -52,7 +52,7 @@ export const AiChatView: React.FC<AiChatViewProps> = ({ localFiles, privacy, onT
 
   // Direct Chat state
   const [chatHistory, setChatHistory] = useState<Array<{ role: "user" | "assistant"; content: string; meta?: string }>>([]);
-  const [includeFiles, setIncludeFiles] = useState(false);
+  const [includeFiles, setIncludeFiles] = useState(true);
 
   // Task Spec state
   const [command, setCommand] = useState("");
