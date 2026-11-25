@@ -125,10 +125,11 @@ export const api = {
     apiRequest<any>("/api/drive/config", { method: "PUT", body: JSON.stringify(body) }),
   startDriveOAuth: () => apiRequest<{ auth_url: string; state: string }>("/api/drive/oauth/start"),
   disconnectDrive: () => apiRequest<any>("/api/drive/disconnect", { method: "POST" }),
-  listDriveFiles: (query?: string, page_token?: string) => {
+  listDriveFiles: (query?: string, page_token?: string, folder_id?: string) => {
     const qs = new URLSearchParams();
     if (query) qs.set("query", query);
     if (page_token) qs.set("page_token", page_token);
+    if (folder_id) qs.set("folder_id", folder_id);
     return apiRequest<any>(`/api/drive/files?${qs.toString()}`);
   },
   uploadToDrive: (file_id: string, parent_folder_id?: string) =>

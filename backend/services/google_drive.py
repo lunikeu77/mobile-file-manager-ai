@@ -270,6 +270,7 @@ class GoogleDriveService:
     async def list_files(
         self,
         *,
+        folder_id: str | None = None,
         query: str | None = None,
         mime_type: str | None = None,
         extension: str | None = None,
@@ -278,22 +279,47 @@ class GoogleDriveService:
         page_token: str | None = None,
         page_size: int = 50,
     ) -> dict[str, Any]:
+        prefs = await self.db.get_preferences()
+        workspace_folder_id = prefs.get("drive_workspace_folder_id", "").strip()
+        workspace_folder_name = prefs.get("drive_workspace_folder_name", "MobileFileManager_Workspace").strip()
+
+        if not workspace_folder_id:
+            try:
+                ensured = await self.ensure_workspace_folder()
+                workspace_folder_id = (ensured.get("folder_id") or "").strip()
+                workspace_folder_name = ensured.get("name", workspace_folder_name)
+            except Exception:
+                pass
+
+        if folder_id is not None and folder_id.strip():
+            effective_folder_id = folder_id.strip()
+        elif query and query.strip():
+            effective_folder_id = "all"
+        elif workspace_folder_id:
+            effective_folder_id = workspace_folder_id
+        else:
+            effective_folder_id = "root"
+
         q_parts = ["trashed = false"]
+        if effective_folder_id != "all":
+            escaped_fid = effective_folder_id.replace("'", "\\'")
+            q_parts.append(f"'{escaped_fid}' in parents")
+
         if query:
-            escaped = query.replace("'", "\\'")
+            escaped = query.strip().replace("'", "\\'")
             q_parts.append(f"name contains '{escaped}'")
         if mime_type:
-            escaped_mime = mime_type.replace("'", "\\'")
+            escaped_mime = mime_type.strip().replace("'", "\\'")
             q_parts.append(f"mimeType contains '{escaped_mime}'")
         if extension:
-            ext_clean = extension.lstrip(".").replace("'", "\\'")
+            ext_clean = extension.lstrip(".").strip().replace("'", "\\'")
             q_parts.append(f"name contains '.{ext_clean}'")
 
         params: dict[str, Any] = {
             "q": " and ".join(q_parts),
             "pageSize": min(max(1, page_size), 100),
             "fields": "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, webViewLink)",
-            "orderBy": "modifiedTime desc",
+            "orderBy": "folder, modifiedTime desc",
         }
         if page_token:
             params["pageToken"] = page_token
@@ -348,9 +374,36 @@ class GoogleDriveService:
                 continue
             filtered.append(item)
 
+        filtered.sort(
+            key=lambda x: (
+                0 if x.get("mimeType") == "application/vnd.google-apps.folder" else 1,
+                x.get("name", "").lower(),
+            )
+        )
+
+        current_folder_name = "전체 드라이브 검색"
+        if effective_folder_id == "root":
+            current_folder_name = "내 드라이브"
+        elif effective_folder_id == workspace_folder_id:
+            current_folder_name = workspace_folder_name
+        elif effective_folder_id != "all":
+            row = await self.db.fetch_one("SELECT name FROM file_cache WHERE file_id = ?", (effective_folder_id,))
+            if row and row.get("name"):
+                current_folder_name = row["name"]
+            else:
+                try:
+                    fmeta = await self.get_file_metadata(effective_folder_id)
+                    current_folder_name = fmeta.get("name", effective_folder_id)
+                except Exception:
+                    current_folder_name = effective_folder_id
+
         return {
             "files": filtered,
             "next_page_token": data.get("nextPageToken"),
+            "current_folder_id": effective_folder_id,
+            "current_folder_name": current_folder_name,
+            "workspace_folder_id": workspace_folder_id,
+            "workspace_folder_name": workspace_folder_name,
         }
 
     async def get_file_metadata(self, file_id: str) -> dict[str, Any]:

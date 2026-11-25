@@ -76,12 +76,18 @@ async def disconnect_drive(request: Request):
 async def list_drive_files(
     request: Request,
     query: str | None = Query(None),
+    folder_id: str | None = Query(None),
     page_token: str | None = Query(None),
     page_size: int = Query(50, ge=1, le=100),
 ):
     container = request.app.state.container
     try:
-        res = await container.drive.list_files(query=query, page_token=page_token, page_size=page_size)
+        res = await container.drive.list_files(
+            query=query,
+            folder_id=folder_id,
+            page_token=page_token,
+            page_size=page_size,
+        )
         return {"ok": True, "data": res}
     except GoogleDriveAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc

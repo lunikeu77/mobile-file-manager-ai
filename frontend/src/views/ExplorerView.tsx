@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { Cloud, CloudUpload, HardDrive, Search, Trash2, Upload, FileEdit, Minimize2 } from "lucide-react";
+import {
+  Cloud,
+  CloudUpload,
+  HardDrive,
+  Search,
+  Trash2,
+  Upload,
+  FileEdit,
+  Minimize2,
+  Folder,
+  FolderOpen,
+  CornerLeftUp,
+  File,
+} from "lucide-react";
 import { api, formatBytes } from "../api/client";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileItem } from "../types";
@@ -8,6 +21,11 @@ interface ExplorerViewProps {
   onSelectFile: (file: FileItem) => void;
   onOpenCompression: (file: FileItem) => void;
   onRefreshSystem: () => void;
+}
+
+interface BreadcrumbItem {
+  id: string;
+  name: string;
 }
 
 export const ExplorerView: React.FC<ExplorerViewProps> = ({
@@ -27,7 +45,11 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileItem | null>(null);
 
-  const loadFiles = async (pageToken?: string) => {
+  // Google Drive folder hierarchy & breadcrumb state
+  const [driveFolderId, setDriveFolderId] = useState<string>("");
+  const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
+
+  const loadFiles = async (pageToken?: string, folderIdOverride?: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -40,7 +62,8 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         setFiles(items);
         setNextPageToken(null);
       } else {
-        const res = await api.listDriveFiles(query || undefined, pageToken);
+        const targetFolder = folderIdOverride !== undefined ? folderIdOverride : driveFolderId;
+        const res = await api.listDriveFiles(query || undefined, pageToken, targetFolder || undefined);
         const mapped: FileItem[] = (res.files || []).map((f: any) => ({
           file_id: f.id,
           source: "google_drive",
@@ -48,9 +71,21 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
           mime_type: f.mimeType || "application/octet-stream",
           size: Number(f.size || 0),
           modified_time: f.modifiedTime || "",
+          parent_id: (f.parents && f.parents[0]) || "",
         }));
+
         setFiles(pageToken ? [...files, ...mapped] : mapped);
         setNextPageToken(res.next_page_token || null);
+
+        // Initialize or sync breadcrumbs if empty
+        if (!pageToken && breadcrumbs.length === 0 && res.current_folder_id) {
+          setBreadcrumbs([
+            {
+              id: res.current_folder_id,
+              name: res.current_folder_name || "워크스페이스 폴더",
+            },
+          ]);
+        }
       }
     } catch (err: any) {
       setError(err.message);
@@ -64,6 +99,36 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
     loadFiles();
   }, [source]);
 
+  // Navigate into a Google Drive folder
+  const openDriveFolder = (folderId: string, folderName: string) => {
+    setDriveFolderId(folderId);
+    setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
+    setQuery("");
+    loadFiles(undefined, folderId);
+  };
+
+  // Click breadcrumb to jump to any ancestor
+  const goToBreadcrumb = (index: number) => {
+    const target = breadcrumbs[index];
+    const newCrumbs = breadcrumbs.slice(0, index + 1);
+    setBreadcrumbs(newCrumbs);
+    setDriveFolderId(target.id);
+    setQuery("");
+    loadFiles(undefined, target.id);
+  };
+
+  // Up one folder level
+  const navigateUp = () => {
+    if (breadcrumbs.length > 1) {
+      goToBreadcrumb(breadcrumbs.length - 2);
+    } else {
+      setDriveFolderId("root");
+      setBreadcrumbs([{ id: "root", name: "내 드라이브 (루트)" }]);
+      setQuery("");
+      loadFiles(undefined, "root");
+    }
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -72,7 +137,8 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
     try {
       const uploaded = await api.uploadFile(file);
       if (source === "google_drive") {
-        const res = await api.uploadToDrive(uploaded.file_id);
+        const targetParent = driveFolderId && driveFolderId !== "all" && driveFolderId !== "root" ? driveFolderId : undefined;
+        const res = await api.uploadToDrive(uploaded.file_id, targetParent);
         setInfo(`Google Drive 업로드 완료: ${file.name} (ID: ${res.drive_file?.id})`);
       } else {
         setInfo(`로컬 워크스페이스 업로드 완료: ${file.name}`);
@@ -140,12 +206,12 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-white">파일 탐색기</h2>
-          <p className="text-sm text-slate-400">로컬 워크스페이스(원본/결과물) 및 Google Drive 통합 탐색</p>
+          <p className="text-sm text-slate-400">로컬 워크스페이스(원본/결과물) 및 Google Drive 폴더별 계층 탐색</p>
         </div>
 
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500">
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 shadow-lg shadow-indigo-600/20">
           <Upload className="h-4 w-4" />
-          {source === "google_drive" ? "PC → Google Drive 바로 업로드" : "파일 업로드 (로컬)"}
+          {source === "google_drive" ? "현재 Drive 폴더에 파일 업로드" : "파일 업로드 (로컬)"}
           <input type="file" className="hidden" onChange={handleUpload} />
         </label>
       </div>
@@ -154,25 +220,106 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
       <div className="flex gap-2">
         <button
           onClick={() => setSource("local")}
-          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium ${
-            source === "local" ? "bg-indigo-600/25 text-indigo-300 ring-1 ring-indigo-500/40" : "bg-slate-900 text-slate-400"
+          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition ${
+            source === "local"
+              ? "bg-indigo-600/25 text-indigo-300 ring-1 ring-indigo-500/40"
+              : "bg-slate-900 text-slate-400 hover:text-white"
           }`}
         >
           <HardDrive className="h-4 w-4" />
           로컬 워크스페이스
         </button>
         <button
-          onClick={() => setSource("google_drive")}
-          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium ${
+          onClick={() => {
+            setSource("google_drive");
+            setDriveFolderId("");
+            setBreadcrumbs([]);
+          }}
+          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition ${
             source === "google_drive"
               ? "bg-emerald-600/25 text-emerald-300 ring-1 ring-emerald-500/40"
-              : "bg-slate-900 text-slate-400"
+              : "bg-slate-900 text-slate-400 hover:text-white"
           }`}
         >
           <Cloud className="h-4 w-4" />
-          Google Drive
+          Google Drive (폴더 탐색)
         </button>
       </div>
+
+      {/* Google Drive Breadcrumb Bar & Quick Navigation */}
+      {source === "google_drive" && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/90 p-3.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-semibold text-slate-400 mr-1">위치:</span>
+            {breadcrumbs.length === 0 ? (
+              <span className="text-slate-300">📁 MobileFileManager_Workspace (기본)</span>
+            ) : (
+              breadcrumbs.map((crumb, idx) => (
+                <React.Fragment key={crumb.id + idx}>
+                  {idx > 0 && <span className="text-slate-600 font-bold">/</span>}
+                  <button
+                    onClick={() => goToBreadcrumb(idx)}
+                    className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold transition ${
+                      idx === breadcrumbs.length - 1
+                        ? "bg-indigo-600/30 text-indigo-200 ring-1 ring-indigo-500/50"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                    }`}
+                  >
+                    <Folder className="h-3.5 w-3.5 text-amber-400" />
+                    {crumb.name}
+                  </button>
+                </React.Fragment>
+              ))
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {breadcrumbs.length > 1 && (
+              <button
+                onClick={navigateUp}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition"
+                title="상위 폴더로 이동"
+              >
+                <CornerLeftUp className="h-3.5 w-3.5 text-slate-400" />
+                상위 폴더
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setDriveFolderId("");
+                setBreadcrumbs([]);
+                loadFiles(undefined, "");
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition"
+              title="앱 전용 워크스페이스 폴더"
+            >
+              워크스페이스 폴더
+            </button>
+            <button
+              onClick={() => {
+                setDriveFolderId("root");
+                setBreadcrumbs([{ id: "root", name: "내 드라이브 (루트)" }]);
+                loadFiles(undefined, "root");
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition"
+              title="Google Drive 루트 전체"
+            >
+              내 드라이브 전체
+            </button>
+            <button
+              onClick={() => {
+                setDriveFolderId("all");
+                setBreadcrumbs([{ id: "all", name: "전체 검색 (플랫)" }]);
+                loadFiles(undefined, "all");
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition"
+              title="모든 폴더 무시하고 플랫 검색"
+            >
+              전체 플랫 검색
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Search & Filter */}
       <div className="flex flex-wrap gap-2">
@@ -181,7 +328,12 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="파일명 검색..."
+            onKeyDown={(e) => e.key === "Enter" && loadFiles()}
+            placeholder={
+              source === "google_drive"
+                ? "Google Drive 파일 및 폴더 검색..."
+                : "로컬 파일명 검색..."
+            }
             className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 pr-3 pl-9 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
           />
         </div>
@@ -246,124 +398,173 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         {loading && <div className="text-sm text-slate-400">불러오는 중...</div>}
         {!loading && files.length === 0 && (
           <div className="rounded-2xl border border-dashed border-slate-800 p-8 text-center text-sm text-slate-400">
-            표시할 파일이 없습니다. 상단 '파일 업로드' 버튼으로 파일을 추가하거나 URL 다운로드를 사용하세요.
+            {source === "google_drive"
+              ? "이 폴더 안에 표시할 파일이나 하위 폴더가 없습니다. 상단 '파일 업로드' 버튼으로 파일을 추가할 수 있습니다."
+              : "표시할 파일이 없습니다. 상단 '파일 업로드' 버튼으로 파일을 추가하거나 URL 다운로드를 사용하세요."}
           </div>
         )}
-        {files.map((f) => (
-          <div
-            key={f.file_id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-3.5 hover:border-slate-700"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              {source === "local" && (
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(f.file_id)}
-                  onChange={() => toggleSelect(f.file_id)}
-                  className="h-4 w-4 rounded border-slate-600 bg-slate-800"
-                />
-              )}
-              <div className="min-w-0">
-                <button
-                  onClick={() => onSelectFile(f)}
-                  className="truncate text-left text-sm font-semibold text-white hover:text-indigo-300"
-                >
-                  {f.name}
-                </button>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                  <span>{formatBytes(f.size)}</span>
-                  <span>·</span>
-                  <span>{f.mime_type}</span>
-                  {f.parent_id && (
-                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">{f.parent_id}</span>
-                  )}
-                </div>
-              </div>
-            </div>
+        {files.map((f) => {
+          const isFolder = f.mime_type === "application/vnd.google-apps.folder";
 
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => onSelectFile(f)}
-                className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-800"
-                title="상세 / 이름·확장자 변경"
-              >
-                <FileEdit className="h-3.5 w-3.5" />
-              </button>
-              {source === "local" && (
-                <button
-                  onClick={async () => {
-                    setError(null);
-                    try {
-                      const res = await api.uploadToDrive(f.file_id);
-                      setInfo(`Google Drive 업로드 완료: ${f.name} (ID: ${res.drive_file?.id})`);
-                    } catch (e: any) {
-                      setError(e.message);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
-                  title="Google Drive 전용 폴더로 업로드"
-                >
-                  <CloudUpload className="h-3.5 w-3.5" />
-                  Drive 업로드
-                </button>
-              )}
-              {source === "local" && (f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
-                <button
-                  onClick={() => onOpenCompression(f)}
-                  className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20"
-                  title="압축 설정"
-                >
-                  <Minimize2 className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {source === "google_drive" && (
-                <>
-                  {(f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
+          return (
+            <div
+              key={f.file_id}
+              className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-3.5 transition ${
+                isFolder
+                  ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50 hover:bg-amber-500/10"
+                  : "border-slate-800 bg-slate-900/70 hover:border-slate-700"
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                {source === "local" && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(f.file_id)}
+                    onChange={() => toggleSelect(f.file_id)}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-800"
+                  />
+                )}
+
+                {isFolder ? (
+                  <Folder className="h-5 w-5 shrink-0 text-amber-400" />
+                ) : (
+                  <File className="h-5 w-5 shrink-0 text-slate-400" />
+                )}
+
+                <div className="min-w-0">
+                  {isFolder ? (
                     <button
-                      onClick={async () => {
-                        try {
-                          const action = f.name.toLowerCase().endsWith(".pdf") ? "COMPRESS_PDF" : "COMPRESS_VIDEO";
-                          const res = await api.runDriveRoundtrip(f.file_id, action);
-                          setInfo(
-                            `Drive 왕복 작업 시작 (${res.task?.task_id}): 임시 다운로드 → 압축 → 전용 폴더(${res.workspace_folder?.name}) 재업로드`
-                          );
-                          onRefreshSystem();
-                        } catch (e: any) {
-                          setError(e.message);
-                        }
-                      }}
-                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-300"
-                      title="Drive에서 임시 다운로드 → 압축 → 전용 폴더 재업로드"
+                      onClick={() => openDriveFolder(f.file_id, f.name)}
+                      className="truncate text-left text-sm font-semibold text-amber-300 hover:text-amber-200 hover:underline flex items-center gap-1.5"
                     >
-                      압축 후 Drive 저장
+                      <span>{f.name}</span>
+                      <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300 font-normal">
+                        폴더
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onSelectFile(f)}
+                      className="truncate text-left text-sm font-semibold text-white hover:text-indigo-300"
+                    >
+                      {f.name}
                     </button>
                   )}
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-0.5">
+                    {!isFolder && <span>{formatBytes(f.size)}</span>}
+                    {!isFolder && <span>·</span>}
+                    <span>{isFolder ? "Google Drive 폴더" : f.mime_type}</span>
+                    {f.modified_time && (
+                      <>
+                        <span>·</span>
+                        <span>{f.modified_time.split("T")[0]}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {isFolder ? (
                   <button
-                    onClick={async () => {
-                      try {
-                        await api.downloadFromDrive(f.file_id);
-                        setInfo(`Drive에서 로컬 워크스페이스로 다운로드 완료: ${f.name}`);
-                        onRefreshSystem();
-                      } catch (e: any) {
-                        setError(e.message);
-                      }
-                    }}
-                    className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300"
+                    onClick={() => openDriveFolder(f.file_id, f.name)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/30 transition"
                   >
-                    로컬로 받기
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    열기
                   </button>
-                </>
-              )}
-              <button
-                onClick={() => setDeleteTarget(f)}
-                className="rounded-lg border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/15"
-                title="삭제"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => onSelectFile(f)}
+                      className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-800"
+                      title="상세 / 이름·확장자 변경"
+                    >
+                      <FileEdit className="h-3.5 w-3.5" />
+                    </button>
+                    {source === "local" && (
+                      <button
+                        onClick={async () => {
+                          setError(null);
+                          try {
+                            const res = await api.uploadToDrive(f.file_id);
+                            setInfo(`Google Drive 업로드 완료: ${f.name} (ID: ${res.drive_file?.id})`);
+                          } catch (e: any) {
+                            setError(e.message);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
+                        title="Google Drive 전용 폴더로 업로드"
+                      >
+                        <CloudUpload className="h-3.5 w-3.5" />
+                        Drive 업로드
+                      </button>
+                    )}
+                    {source === "local" &&
+                      (f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
+                        <button
+                          onClick={() => onOpenCompression(f)}
+                          className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20"
+                          title="압축 설정"
+                        >
+                          <Minimize2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    {source === "google_drive" && (
+                      <>
+                        {(f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const action = f.name.toLowerCase().endsWith(".pdf")
+                                  ? "COMPRESS_PDF"
+                                  : "COMPRESS_VIDEO";
+                                const res = await api.runDriveRoundtrip(f.file_id, action);
+                                setInfo(
+                                  `Drive 왕복 작업 시작 (${res.task?.task_id}): 임시 다운로드 → 압축 → 전용 폴더(${res.workspace_folder?.name}) 재업로드`
+                                );
+                                onRefreshSystem();
+                              } catch (e: any) {
+                                setError(e.message);
+                              }
+                            }}
+                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20"
+                            title="Drive에서 임시 다운로드 → 압축 → 전용 폴더 재업로드"
+                          >
+                            압축 후 Drive 저장
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            try {
+                              await api.downloadFromDrive(f.file_id);
+                              setInfo(`Drive에서 로컬 워크스페이스로 다운로드 완료: ${f.name}`);
+                              onRefreshSystem();
+                            } catch (e: any) {
+                              setError(e.message);
+                            }
+                          }}
+                          className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
+                        >
+                          로컬로 받기
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+
+                <button
+                  onClick={() => setDeleteTarget(f)}
+                  className="rounded-lg border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/15"
+                  title="삭제"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {nextPageToken && (
@@ -377,8 +578,10 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
 
       <ConfirmModal
         open={Boolean(deleteTarget)}
-        title="파일 삭제 확인"
-        description={`정말로 '${deleteTarget?.name}' 파일을 삭제하시겠습니까?\n삭제 작업은 되돌릴 수 없으며 명시적 승인 후에만 실행됩니다.`}
+        title={deleteTarget?.mime_type === "application/vnd.google-apps.folder" ? "폴더 삭제 확인" : "파일 삭제 확인"}
+        description={`정말로 '${deleteTarget?.name}' ${
+          deleteTarget?.mime_type === "application/vnd.google-apps.folder" ? "폴더와 내부 항목을" : "파일을"
+        } 삭제하시겠습니까?\n삭제 작업은 되돌릴 수 없으며 명시적 승인 후에만 실행됩니다.`}
         confirmLabel="영구 삭제"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
