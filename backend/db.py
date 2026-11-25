@@ -195,6 +195,9 @@ class Database:
         await self._conn.execute(
             "UPDATE ai_provider_settings SET model_id = 'openrouter/free' WHERE provider_id = 'openrouter' AND model_id = 'meta-llama/llama-3.3-70b-instruct:free'"
         )
+        await self._conn.execute(
+            "UPDATE app_preferences SET value = 'drive' WHERE key = 'google_scope_mode' AND value = 'drive.file'"
+        )
         for key, value in DEFAULT_PREFERENCES.items():
             await self._conn.execute(
                 "INSERT OR IGNORE INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)",
