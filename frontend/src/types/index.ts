@@ -85,7 +85,7 @@ export interface DownloadJob {
 }
 
 export interface ProviderSetting {
-  provider_id: "openrouter" | "gemini" | "openai";
+  provider_id: "openrouter" | "gemini" | "kimi" | "openai";
   enabled: boolean;
   priority: number;
   model_id: string;
@@ -121,6 +121,8 @@ export interface DriveConfig {
   redirect_uri: string;
   scope_mode: "drive.file" | "drive.readonly" | "drive";
   scope_url: string;
+  workspace_folder_id?: string;
+  workspace_folder_name?: string;
   scope_notice: string;
 }
 

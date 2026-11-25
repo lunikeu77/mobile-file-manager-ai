@@ -6,9 +6,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from backend.models import (
+    AllowedAction,
     ChangeExtensionRequest,
     ConfirmDeleteRequest,
     CreateDriveUploadRequest,
+    DriveRoundtripRequest,
     GoogleOAuthConfigUpdate,
     RenameFileRequest,
 )
@@ -54,6 +56,10 @@ async def oauth_callback(
     container = request.app.state.container
     try:
         await container.drive.handle_oauth_callback(code, state)
+        try:
+            await container.drive.ensure_workspace_folder()
+        except Exception:
+            pass
         return RedirectResponse(url="/?drive=connected")
     except GoogleDriveAuthError as exc:
         return RedirectResponse(url=f"/?drive=error&reason={quote(str(exc))}")
@@ -166,6 +172,76 @@ async def download_from_drive(request: Request, file_id: str):
     try:
         res = await container.drive.download_file_to_local(file_id)
         return {"ok": True, "data": res}
+    except GoogleDriveAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/workspace-folder/ensure")
+async def ensure_drive_workspace_folder(request: Request):
+    container = request.app.state.container
+    try:
+        folder = await container.drive.ensure_workspace_folder()
+        return {"ok": True, "data": folder}
+    except GoogleDriveAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/roundtrip")
+async def drive_roundtrip_pipeline(request: Request, body: DriveRoundtripRequest):
+    """
+    Google Drive 전용 폴더 기반 파이프라인:
+    1) Drive 파일 다운로드 -> 2) 서버 압축(MP4/PDF) -> 3) Drive 전용 폴더로 재업로드
+    (선택 시 로컬 임시/결과 파일 정리)
+    """
+    container = request.app.state.container
+    try:
+        folder = await container.drive.ensure_workspace_folder()
+        dl = await container.drive.download_file_to_local(body.drive_file_id)
+        local_file = dl.get("local_file")
+        if not local_file:
+            raise HTTPException(status_code=500, detail="Downloaded Drive file could not be indexed locally.")
+        local_id = local_file["file_id"]
+
+        steps = [
+            {
+                "action": body.action,
+                "source": "local",
+                "file_id": local_id,
+                "options": {"preset": body.preset} if body.preset else {},
+            },
+            {
+                "action": AllowedAction.UPLOAD_FILE.value,
+                "source": "local",
+                "input_ref": "$previous.output",
+                "options": {"destination_folder_id": folder["folder_id"]},
+            },
+        ]
+        if body.cleanup_local_after:
+            steps.append(
+                {
+                    "action": AllowedAction.DELETE_FILE.value,
+                    "source": "local",
+                    "file_id": local_id,
+                }
+            )
+        task = await container.task_engine.create_task(
+            title=f"Drive 왕복 처리 ({body.action}): {local_file['name']}",
+            task_type="drive_roundtrip",
+            confirmed=True,
+            spec={
+                "schema_version": "1.0",
+                "intent": "drive_roundtrip_pipeline",
+                "steps": steps,
+                "requires_confirmation": True,
+            },
+        )
+        return {"ok": True, "data": {"task": task, "workspace_folder": folder}}
     except GoogleDriveAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except SpecValidationError as exc:

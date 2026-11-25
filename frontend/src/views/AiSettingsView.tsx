@@ -266,17 +266,38 @@ export const AiSettingsView: React.FC<{ onRefreshSystem: () => void }> = ({ onRe
             }}
             className="rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white"
           >
-            Google 계정 연결하기
+            Google 계정으로 바로 연결하기
           </button>
           {driveCfg?.connected && (
-            <button
-              onClick={() => api.disconnectDrive().then(loadAll)}
-              className="rounded-xl border border-rose-500/40 px-4 py-2 text-xs text-rose-300"
-            >
-              Drive 연결 해제
-            </button>
+            <>
+              <button
+                onClick={async () => {
+                  try {
+                    const f = await api.ensureDriveWorkspaceFolder();
+                    setMsg(`전용 Drive 폴더 준비 완료: ${f.name} (${f.folder_id})`);
+                    await loadAll();
+                  } catch (e: any) {
+                    setErr(e.message);
+                  }
+                }}
+                className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-300"
+              >
+                전용 폴더({driveCfg.workspace_folder_name || "MobileFileManager_Workspace"}) 확인/생성
+              </button>
+              <button
+                onClick={() => api.disconnectDrive().then(loadAll)}
+                className="rounded-xl border border-rose-500/40 px-4 py-2 text-xs text-rose-300"
+              >
+                Drive 연결 해제
+              </button>
+            </>
           )}
         </div>
+        {driveCfg?.workspace_folder_id && (
+          <div className="text-xs text-emerald-300">
+            연결된 영구 저장 폴더 ID: <code className="rounded bg-slate-950 px-2 py-0.5">{driveCfg.workspace_folder_id}</code>
+          </div>
+        )}
       </div>
 
       {/* Recent Usage Events */}

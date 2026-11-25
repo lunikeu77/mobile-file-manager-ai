@@ -160,6 +160,28 @@ class AICommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=2000)
     selected_file_ids: list[str] = Field(default_factory=list, max_length=50)
     source: Literal["local", "google_drive", "all"] = "local"
+    preferred_provider: Literal["auto", "openrouter", "gemini", "kimi", "openai"] = "auto"
+    preferred_model: str | None = Field(default=None, max_length=150)
+
+
+class AIChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AIChatRequest(BaseModel):
+    provider_id: Literal["openrouter", "gemini", "kimi", "openai"]
+    model_id: str | None = Field(default=None, max_length=150)
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[AIChatMessage] = Field(default_factory=list, max_length=20)
+    include_file_context: bool = False
+
+
+class DriveRoundtripRequest(BaseModel):
+    drive_file_id: str = Field(min_length=1, max_length=256)
+    action: Literal["COMPRESS_VIDEO", "COMPRESS_PDF"]
+    preset: str | None = Field(default=None, max_length=40)
+    cleanup_local_after: bool = True
 
 
 class ProviderSettingUpdate(BaseModel):

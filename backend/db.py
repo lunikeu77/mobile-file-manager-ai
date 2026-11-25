@@ -141,17 +141,19 @@ CREATE TABLE IF NOT EXISTS app_preferences (
 DEFAULT_PROVIDERS = [
     ("openrouter", 1, 1, "meta-llama/llama-3.3-70b-instruct:free", "unconfigured", 1, 0.0),
     ("gemini", 1, 2, "gemini-2.5-flash", "unconfigured", 1, 0.0),
-    ("openai", 0, 3, "gpt-4o-mini", "unconfigured", 0, 5.0),
+    ("kimi", 1, 3, "moonshot-v1-8k", "unconfigured", 0, 5.0),
+    ("openai", 0, 4, "gpt-4o-mini", "unconfigured", 0, 5.0),
 ]
 
 DEFAULT_PREFERENCES = {
     "ai_send_filenames": "false",
     "ai_send_metadata": "true",
-    "ai_free_only_mode": "true",
+    "ai_free_only_mode": "false",
     "ai_auto_failover": "true",
     "ai_monthly_limit_usd": "0.0",
     "temp_cleanup_hours": "24",
     "google_scope_mode": "drive.file",
+    "drive_workspace_folder_name": "MobileFileManager_Workspace",
 }
 
 

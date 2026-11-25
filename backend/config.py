@@ -48,6 +48,8 @@ class Settings:
     # Optional env-injected AI keys (never logged or returned in plaintext)
     openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    kimi_api_key: str = field(default_factory=lambda: os.getenv("KIMI_API_KEY", ""))
+    kimi_base_url: str = field(default_factory=lambda: os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/"))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
 
     @property

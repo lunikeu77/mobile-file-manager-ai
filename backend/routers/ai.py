@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from backend.models import AICommandRequest
+from backend.models import AIChatRequest, AICommandRequest
 from backend.security.validator import SpecValidationError
 from backend.services.ai_providers import ProviderAuthError
 
@@ -17,8 +17,30 @@ async def plan_ai_command(request: Request, body: AICommandRequest):
             body.command,
             selected_file_ids=body.selected_file_ids,
             source=body.source,
+            preferred_provider=body.preferred_provider,
+            preferred_model=body.preferred_model,
         )
         return {"ok": True, "data": plan}
+    except ProviderAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/chat")
+async def chat_with_ai(request: Request, body: AIChatRequest):
+    container = request.app.state.container
+    try:
+        res = await container.ai_router.chat_with_provider(
+            provider_id=body.provider_id,
+            model_id=body.model_id,
+            message=body.message,
+            history=[m.model_dump() for m in body.history],
+            include_file_context=body.include_file_context,
+        )
+        return {"ok": True, "data": res}
     except ProviderAuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except SpecValidationError as exc:

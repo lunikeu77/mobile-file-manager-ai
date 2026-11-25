@@ -105,8 +105,59 @@ class AIProviderAdapter(ABC):
         ...
 
     @abstractmethod
+    async def chat_completion(
+        self,
+        api_key: str,
+        model_id: str,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
     async def get_usage(self, api_key: str) -> dict[str, Any] | None:
         ...
+
+
+async def _openai_compat_chat(
+    *,
+    provider_id: str,
+    url: str,
+    api_key: str,
+    model_id: str,
+    messages: list[dict[str, str]],
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    t0 = time.monotonic()
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", **(extra_headers or {})}
+    try:
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                json={"model": model_id, "messages": messages, "temperature": 0.3},
+            )
+    except httpx.TimeoutException as exc:
+        raise ProviderTransientError(f"{provider_id} request timed out: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise ProviderTransientError(f"{provider_id} network error: {exc}") from exc
+
+    latency = int((time.monotonic() - t0) * 1000)
+    if resp.status_code in {401, 403}:
+        raise ProviderAuthError(f"{provider_id} authentication failed ({resp.status_code}).", resp.status_code)
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise ProviderTransientError(f"{provider_id} rate limit or server error ({resp.status_code}).", resp.status_code)
+    if resp.status_code >= 400:
+        raise SpecValidationError(f"{provider_id} rejected request ({resp.status_code}): {redact_sensitive_text(resp.text[:250])}")
+
+    data = resp.json()
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise SpecValidationError(f"{provider_id} returned empty choices.")
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise SpecValidationError(f"{provider_id} returned empty message content.")
+    return {"reply": content, "usage": data.get("usage"), "latency_ms": latency}
 
 
 def _build_user_prompt(request: AIRequest) -> str:
@@ -199,6 +250,16 @@ class OpenRouterAdapter(AIProviderAdapter):
             latency_ms=latency,
         )
 
+    async def chat_completion(self, api_key: str, model_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        return await _openai_compat_chat(
+            provider_id=self.provider_id,
+            url=f"{self.BASE_URL}/chat/completions",
+            api_key=api_key,
+            model_id=model_id,
+            messages=messages,
+            extra_headers={"X-Title": "Mobile File Manager AI"},
+        )
+
 
 class GeminiAdapter(AIProviderAdapter):
     provider_id = "gemini"
@@ -272,6 +333,99 @@ class GeminiAdapter(AIProviderAdapter):
             raw_json=_extract_json_object(text),
             token_usage=data.get("usageMetadata"),
             latency_ms=latency,
+        )
+
+    async def chat_completion(self, api_key: str, model_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        t0 = time.monotonic()
+        contents = [
+            {
+                "role": "model" if m["role"] == "assistant" else "user",
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+            if m["role"] != "system"
+        ]
+        sys_texts = [m["content"] for m in messages if m["role"] == "system"]
+        body: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": 0.3}}
+        if sys_texts:
+            body["system_instruction"] = {"parts": [{"text": "\n".join(sys_texts)}]}
+        try:
+            async with httpx.AsyncClient(timeout=40.0) as client:
+                resp = await client.post(
+                    f"{self.BASE_URL}/models/{model_id}:generateContent",
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=body,
+                )
+        except httpx.TimeoutException as exc:
+            raise ProviderTransientError(f"Gemini request timed out: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderTransientError(f"Gemini network error: {exc}") from exc
+        latency = int((time.monotonic() - t0) * 1000)
+        if resp.status_code in {401, 403}:
+            raise ProviderAuthError(f"Gemini authentication failed ({resp.status_code}).", resp.status_code)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise ProviderTransientError(f"Gemini error ({resp.status_code}).", resp.status_code)
+        if resp.status_code >= 400:
+            raise SpecValidationError(f"Gemini rejected request ({resp.status_code}): {redact_sensitive_text(resp.text[:250])}")
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise SpecValidationError("Gemini returned empty candidates.")
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        reply = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not reply.strip():
+            raise SpecValidationError("Gemini returned empty text response.")
+        return {"reply": reply, "usage": data.get("usageMetadata"), "latency_ms": latency}
+
+
+class KimiAdapter(AIProviderAdapter):
+    provider_id = "kimi"
+
+    def __init__(self, base_url: str = "https://api.moonshot.ai/v1") -> None:
+        self.base_url = base_url.rstrip("/")
+
+    async def check_health(self, api_key: str, model_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code in {401, 403}:
+            raise ProviderAuthError("Kimi (Moonshot) API key rejected (401/403).", resp.status_code)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise ProviderTransientError(f"Kimi health check error ({resp.status_code}).", resp.status_code)
+        resp.raise_for_status()
+        return {"ok": True, "provider_id": self.provider_id, "model": model_id}
+
+    async def get_usage(self, api_key: str) -> dict[str, Any] | None:
+        return {"note": "Moonshot AI (Kimi) API 키 잔액/사용량 기준으로 동작합니다."}
+
+    async def generate_task_proposal(self, api_key: str, model_id: str, request: AIRequest) -> AIResult:
+        res = await _openai_compat_chat(
+            provider_id=self.provider_id,
+            url=f"{self.base_url}/chat/completions",
+            api_key=api_key,
+            model_id=model_id,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _build_user_prompt(request)},
+            ],
+        )
+        return AIResult(
+            provider_id=self.provider_id,
+            model_id=model_id,
+            raw_json=_extract_json_object(res["reply"]),
+            token_usage=res.get("usage"),
+            latency_ms=res["latency_ms"],
+        )
+
+    async def chat_completion(self, api_key: str, model_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        return await _openai_compat_chat(
+            provider_id=self.provider_id,
+            url=f"{self.base_url}/chat/completions",
+            api_key=api_key,
+            model_id=model_id,
+            messages=messages,
         )
 
 
@@ -350,6 +504,16 @@ class OpenAIAdapter(AIProviderAdapter):
             latency_ms=latency,
         )
 
+    async def chat_completion(self, api_key: str, model_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        return await _openai_compat_chat(
+            provider_id=self.provider_id,
+            url=f"{self.BASE_URL}/chat/completions",
+            api_key=api_key,
+            model_id=model_id,
+            messages=messages,
+            extra_headers={"X-Title": "Mobile File Manager AI"},
+        )
+
 
 class AIRouter:
     """
@@ -375,6 +539,7 @@ class AIRouter:
         self.adapters: dict[str, AIProviderAdapter] = {
             "openrouter": OpenRouterAdapter(),
             "gemini": GeminiAdapter(),
+            "kimi": KimiAdapter(settings.kimi_base_url),
             "openai": OpenAIAdapter(),
         }
         self.retry_base_delay_sec = 0.4
@@ -387,6 +552,7 @@ class AIRouter:
         env_map = {
             "openrouter": self.settings.openrouter_api_key,
             "gemini": self.settings.gemini_api_key,
+            "kimi": self.settings.kimi_api_key,
             "openai": self.settings.openai_api_key,
         }
         env_val = env_map.get(provider_id, "")
@@ -559,6 +725,8 @@ class AIRouter:
         *,
         selected_file_ids: list[str] | None = None,
         source: str = "local",
+        preferred_provider: str = "auto",
+        preferred_model: str | None = None,
     ) -> dict[str, Any]:
         correlation_id = f"corr_{uuid.uuid4().hex[:12]}"
         known_ids = await self.local_files.get_all_known_file_ids()
@@ -578,7 +746,7 @@ class AIRouter:
 
         # Step 2: External AI Provider Router
         prefs = await self.db.get_preferences()
-        free_only_global = prefs.get("ai_free_only_mode", "true") == "true"
+        free_only_global = prefs.get("ai_free_only_mode", "false") == "true"
         auto_failover = prefs.get("ai_auto_failover", "true") == "true"
         monthly_limit_usd = float(prefs.get("ai_monthly_limit_usd", "0.0") or 0.0)
         month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -598,13 +766,27 @@ class AIRouter:
         )
 
         providers = await self.db.fetch_all("SELECT * FROM ai_provider_settings WHERE enabled = 1 ORDER BY priority ASC")
+        if preferred_provider and preferred_provider != "auto":
+            selected_row = await self.db.fetch_one(
+                "SELECT * FROM ai_provider_settings WHERE provider_id = ?",
+                (preferred_provider,),
+            )
+            if selected_row:
+                providers = [selected_row] + [p for p in providers if p["provider_id"] != preferred_provider]
+
         now_dt = datetime.now(timezone.utc)
         failover_chain: list[dict[str, Any]] = []
 
         for prov in providers:
             pid = prov["provider_id"]
-            model_id = prov["model_id"]
-            is_paid_provider = pid == "openai" or (pid == "openrouter" and not str(model_id).endswith(":free"))
+            model_id = (
+                preferred_model.strip()
+                if (preferred_model and preferred_provider == pid)
+                else prov["model_id"]
+            )
+            is_paid_provider = pid in {"openai", "kimi"} or (
+                pid == "openrouter" and not str(model_id).endswith(":free")
+            )
 
             if free_only_global and is_paid_provider:
                 failover_chain.append({"provider_id": pid, "skipped": "free_only_mode_enabled"})
@@ -626,7 +808,6 @@ class AIRouter:
                     continue
 
             adapter = self.adapters[pid]
-            model_id = prov["model_id"]
 
             # Max 2 attempts with exponential backoff + jitter on transient errors
             for attempt in range(2):
@@ -705,3 +886,88 @@ class AIRouter:
             "사용 가능한 AI 공급자가 없거나 모든 활성 공급자에서 한도/일시 오류가 발생했습니다. "
             "L0 정형 명령이나 수동 파일 관리 기능은 계속 정상 동작합니다."
         )
+
+    async def chat_with_provider(
+        self,
+        *,
+        provider_id: str,
+        model_id: str | None = None,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+        include_file_context: bool = False,
+    ) -> dict[str, Any]:
+        adapter = self.adapters.get(provider_id)
+        if not adapter:
+            raise SpecValidationError(f"Unknown AI provider: {provider_id}")
+
+        prov_row = await self.db.fetch_one(
+            "SELECT * FROM ai_provider_settings WHERE provider_id = ?",
+            (provider_id,),
+        )
+        eff_model = (model_id or "").strip() or (prov_row["model_id"] if prov_row else "default")
+        key = await self.get_api_key(provider_id)
+        if not key:
+            raise ProviderAuthError(
+                f"{provider_id} API 키가 설정되지 않았습니다. [AI·Drive 설정]에서 키를 등록하세요.",
+                401,
+            )
+
+        prefs = await self.db.get_preferences()
+        free_only_global = prefs.get("ai_free_only_mode", "false") == "true"
+        is_paid = provider_id in {"openai", "kimi"} or (
+            provider_id == "openrouter" and not eff_model.endswith(":free")
+        )
+        if free_only_global and is_paid:
+            raise SpecValidationError(
+                f"무료 전용 모드가 활성화되어 유료 모델({provider_id}/{eff_model}) 호출이 차단되었습니다."
+            )
+
+        correlation_id = f"chat_{uuid.uuid4().hex[:12]}"
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful AI assistant inside a mobile file manager & automation workspace. "
+                    "Answer concisely in the user's language (Korean by default)."
+                ),
+            }
+        ]
+        if include_file_context:
+            ctx, _ = await self._build_sanitized_context("local", prefs)
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"Current workspace file metadata: {json.dumps(ctx[:20], ensure_ascii=False)}",
+                }
+            )
+        for h in (history or [])[-12:]:
+            if h.get("role") in {"user", "assistant"} and h.get("content"):
+                messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            res = await adapter.chat_completion(key, eff_model, messages)
+            await self._record_usage_event(
+                provider_id=provider_id,
+                model_id=eff_model,
+                request_type="chat",
+                token_usage=res.get("usage"),
+                status_code=200,
+                latency_ms=res["latency_ms"],
+                correlation_id=correlation_id,
+            )
+            return {
+                "correlation_id": correlation_id,
+                "provider_id": provider_id,
+                "model_id": eff_model,
+                "reply": res["reply"],
+                "latency_ms": res["latency_ms"],
+                "usage": res.get("usage"),
+            }
+        except ProviderAuthError as exc:
+            await self._record_provider_error(provider_id, "auth_error", str(exc.status_code), str(exc), open_circuit=False)
+            raise
+        except ProviderTransientError as exc:
+            state = "rate_limited" if exc.status_code == 429 else "degraded"
+            await self._record_provider_error(provider_id, state, str(exc.status_code or "503"), str(exc), open_circuit=True)
+            raise RuntimeError(str(exc)) from exc

@@ -64,6 +64,7 @@ def mask_secret(value: str | None) -> str:
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(Bearer\s+)[A-Za-z0-9\-_\.=]+", re.IGNORECASE), r"\1[REDACTED]"),
     (re.compile(r"\bsk-or-v1-[A-Za-z0-9\-_]{10,}"), "[REDACTED_OPENROUTER_KEY]"),
+    (re.compile(r"\bsk-ms-[A-Za-z0-9\-_]{6,}"), "[REDACTED_KIMI_KEY]"),
     (re.compile(r"\bsk-[A-Za-z0-9\-_]{12,}"), "[REDACTED_OPENAI_KEY]"),
     (re.compile(r"\bAIza[0-9A-Za-z\-_]{20,}"), "[REDACTED_GEMINI_KEY]"),
     (re.compile(r"(x-goog-api-key['\":\s=]+)[^\s'\",}]+", re.IGNORECASE), r"\1[REDACTED]"),

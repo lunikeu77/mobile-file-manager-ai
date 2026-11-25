@@ -84,6 +84,8 @@ class GoogleDriveService:
             "redirect_uri": self.settings.effective_google_redirect_uri,
             "scope_mode": scope_mode,
             "scope_url": SCOPE_MAP.get(scope_mode, SCOPE_MAP["drive.file"]),
+            "workspace_folder_id": prefs.get("drive_workspace_folder_id", ""),
+            "workspace_folder_name": prefs.get("drive_workspace_folder_name", "MobileFileManager_Workspace"),
             "scope_notice": (
                 "기본 Scope인 'drive.file'은 본 앱이 생성하거나 사용자가 명시적으로 연 파일만 접근합니다. "
                 "전체 Drive 탐색이 필요한 경우 'drive.readonly' 또는 'drive'를 선택할 수 있으며, "
@@ -161,6 +163,47 @@ class GoogleDriveService:
     async def disconnect(self) -> None:
         await self.secrets.delete_secret(self.SECRET_TOKENS)
         await self.db.execute("DELETE FROM file_cache WHERE source = 'google_drive'")
+        await self.db.set_preference("drive_workspace_folder_id", "")
+
+    async def ensure_workspace_folder(self, folder_name: str | None = None) -> dict[str, Any]:
+        """Finds or creates a dedicated app folder in Google Drive for persistent storage."""
+        prefs = await self.db.get_preferences()
+        name = (folder_name or prefs.get("drive_workspace_folder_name") or "MobileFileManager_Workspace").strip()
+        cached_id = prefs.get("drive_workspace_folder_id", "").strip()
+
+        if cached_id:
+            try:
+                meta = await self.get_file_metadata(cached_id)
+                if meta and meta.get("id"):
+                    return {"folder_id": meta["id"], "name": meta.get("name", name), "created": False}
+            except Exception:
+                pass
+
+        escaped = name.replace("'", "\\'")
+        q = f"name = '{escaped}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        resp = await self._request_with_retry(
+            "GET",
+            f"{GOOGLE_DRIVE_API}/files",
+            params={"q": q, "pageSize": 1, "fields": "files(id, name)"},
+        )
+        found = (resp.json().get("files") or [])
+        if found:
+            fid = found[0]["id"]
+            await self.db.set_preference("drive_workspace_folder_id", fid)
+            await self.db.set_preference("drive_workspace_folder_name", found[0].get("name", name))
+            return {"folder_id": fid, "name": found[0].get("name", name), "created": False}
+
+        create_resp = await self._request_with_retry(
+            "POST",
+            f"{GOOGLE_DRIVE_API}/files",
+            params={"fields": "id, name"},
+            json_body={"name": name, "mimeType": "application/vnd.google-apps.folder"},
+        )
+        created = create_resp.json()
+        fid = created["id"]
+        await self.db.set_preference("drive_workspace_folder_id", fid)
+        await self.db.set_preference("drive_workspace_folder_name", created.get("name", name))
+        return {"folder_id": fid, "name": created.get("name", name), "created": True}
 
     async def _get_valid_access_token(self) -> str:
         tokens = await self.secrets.get_json_secret(self.SECRET_TOKENS)
@@ -430,8 +473,12 @@ class GoogleDriveService:
         )
 
         metadata: dict[str, Any] = {"name": record["name"]}
-        if parent_folder_id:
-            metadata["parents"] = [parent_folder_id]
+        target_parent = parent_folder_id
+        if not target_parent:
+            prefs = await self.db.get_preferences()
+            target_parent = prefs.get("drive_workspace_folder_id") or None
+        if target_parent:
+            metadata["parents"] = [target_parent]
 
         chunk_size = 1024 * 1024 * 2  # 2MB chunks (safe for 512MB RAM)
         try:

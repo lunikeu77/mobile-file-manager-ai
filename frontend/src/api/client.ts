@@ -84,10 +84,39 @@ export const api = {
   retryTask: (id: string) => apiRequest<any>(`/api/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }),
   cancelTask: (id: string) => apiRequest<any>(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
 
-  planAiCommand: (command: string, selected_file_ids: string[], source: string) =>
+  planAiCommand: (
+    command: string,
+    selected_file_ids: string[],
+    source: string,
+    preferred_provider = "auto",
+    preferred_model?: string
+  ) =>
     apiRequest<any>("/api/ai/command", {
       method: "POST",
-      body: JSON.stringify({ command, selected_file_ids, source }),
+      body: JSON.stringify({
+        command,
+        selected_file_ids,
+        source,
+        preferred_provider,
+        preferred_model: preferred_model || null,
+      }),
+    }),
+  chatWithAi: (body: {
+    provider_id: "openrouter" | "gemini" | "kimi" | "openai";
+    model_id?: string;
+    message: string;
+    history: Array<{ role: "user" | "assistant"; content: string }>;
+    include_file_context?: boolean;
+  }) =>
+    apiRequest<{
+      correlation_id: string;
+      provider_id: string;
+      model_id: string;
+      reply: string;
+      latency_ms: number;
+    }>("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   getAiUsage: () => apiRequest<any>("/api/ai/usage"),
 
@@ -123,6 +152,15 @@ export const api = {
     apiRequest<any>(`/api/drive/files/${encodeURIComponent(file_id)}/delete`, {
       method: "POST",
       body: JSON.stringify({ confirmed: true }),
+    }),
+  ensureDriveWorkspaceFolder: () =>
+    apiRequest<{ folder_id: string; name: string; created: boolean }>("/api/drive/workspace-folder/ensure", {
+      method: "POST",
+    }),
+  runDriveRoundtrip: (drive_file_id: string, action: "COMPRESS_VIDEO" | "COMPRESS_PDF", preset?: string) =>
+    apiRequest<any>("/api/drive/roundtrip", {
+      method: "POST",
+      body: JSON.stringify({ drive_file_id, action, preset: preset || null, cleanup_local_after: true }),
     }),
 
   listProviders: () => apiRequest<any[]>("/api/settings/providers"),

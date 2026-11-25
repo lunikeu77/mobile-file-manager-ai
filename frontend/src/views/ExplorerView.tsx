@@ -275,20 +275,42 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
                 </button>
               )}
               {source === "google_drive" && (
-                <button
-                  onClick={async () => {
-                    try {
-                      await api.downloadFromDrive(f.file_id);
-                      setInfo(`Drive에서 로컬 워크스페이스로 다운로드 완료: ${f.name}`);
-                      onRefreshSystem();
-                    } catch (e: any) {
-                      setError(e.message);
-                    }
-                  }}
-                  className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300"
-                >
-                  로컬로 받기
-                </button>
+                <>
+                  {(f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const action = f.name.toLowerCase().endsWith(".pdf") ? "COMPRESS_PDF" : "COMPRESS_VIDEO";
+                          const res = await api.runDriveRoundtrip(f.file_id, action);
+                          setInfo(
+                            `Drive 왕복 작업 시작 (${res.task?.task_id}): 임시 다운로드 → 압축 → 전용 폴더(${res.workspace_folder?.name}) 재업로드`
+                          );
+                          onRefreshSystem();
+                        } catch (e: any) {
+                          setError(e.message);
+                        }
+                      }}
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-300"
+                      title="Drive에서 임시 다운로드 → 압축 → 전용 폴더 재업로드"
+                    >
+                      압축 후 Drive 저장
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.downloadFromDrive(f.file_id);
+                        setInfo(`Drive에서 로컬 워크스페이스로 다운로드 완료: ${f.name}`);
+                        onRefreshSystem();
+                      } catch (e: any) {
+                        setError(e.message);
+                      }
+                    }}
+                    className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300"
+                  >
+                    로컬로 받기
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setDeleteTarget(f)}
