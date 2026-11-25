@@ -146,7 +146,7 @@ DEFAULT_PROVIDERS = [
 ]
 
 DEFAULT_PREFERENCES = {
-    "ai_send_filenames": "false",
+    "ai_send_filenames": "true",
     "ai_send_metadata": "true",
     "ai_free_only_mode": "false",
     "ai_auto_failover": "true",
