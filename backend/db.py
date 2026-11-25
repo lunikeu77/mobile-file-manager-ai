@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS app_preferences (
 
 DEFAULT_PROVIDERS = [
     ("openrouter", 1, 1, "meta-llama/llama-3.3-70b-instruct:free", "unconfigured", 1, 0.0),
-    ("gemini", 1, 2, "gemini-2.5-flash", "unconfigured", 1, 0.0),
+    ("gemini", 1, 2, "gemini-3.8-flash", "unconfigured", 1, 0.0),
     ("kimi", 1, 3, "moonshot-v1-8k", "unconfigured", 0, 5.0),
     ("openai", 0, 4, "gpt-4o-mini", "unconfigured", 0, 5.0),
 ]
@@ -189,6 +189,9 @@ class Database:
                 """,
                 (pid, enabled, priority, model_id, quota_state, free_only, budget, now),
             )
+        await self._conn.execute(
+            "UPDATE ai_provider_settings SET model_id = 'gemini-3.8-flash' WHERE provider_id = 'gemini' AND model_id = 'gemini-2.5-flash'"
+        )
         for key, value in DEFAULT_PREFERENCES.items():
             await self._conn.execute(
                 "INSERT OR IGNORE INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)",

@@ -214,7 +214,26 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         </div>
       )}
 
-      {error && <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
+      {error && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">
+          <span>{error}</span>
+          {source === "google_drive" && (
+            <button
+              onClick={async () => {
+                try {
+                  const { auth_url } = await api.startDriveOAuth();
+                  window.location.href = auth_url;
+                } catch (e: any) {
+                  setError(e.message);
+                }
+              }}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
+            >
+              Google 계정으로 바로 연결하기
+            </button>
+          )}
+        </div>
+      )}
       {info && <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-300">{info}</div>}
 
       {/* File List */}

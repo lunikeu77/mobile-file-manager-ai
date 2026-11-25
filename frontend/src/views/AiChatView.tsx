@@ -27,8 +27,8 @@ const PROVIDER_CARDS: Array<{
   {
     id: "gemini",
     label: "2. Gemini",
-    defaultModel: "gemini-2.5-flash",
-    presets: ["gemini-2.5-flash", "gemini-2.5-pro"],
+    defaultModel: "gemini-3.8-flash",
+    presets: ["gemini-3.8-flash", "gemini-2.5-flash"],
   },
   {
     id: "kimi",
