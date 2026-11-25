@@ -152,7 +152,7 @@ DEFAULT_PREFERENCES = {
     "ai_auto_failover": "true",
     "ai_monthly_limit_usd": "0.0",
     "temp_cleanup_hours": "24",
-    "google_scope_mode": "drive.file",
+    "google_scope_mode": "drive",
     "drive_workspace_folder_name": "MobileFileManager_Workspace",
 }
 
