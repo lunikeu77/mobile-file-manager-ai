@@ -145,7 +145,8 @@ async def _openai_compat_chat(
     if resp.status_code in {401, 403}:
         raise ProviderAuthError(f"{provider_id} authentication failed ({resp.status_code}).", resp.status_code)
     if resp.status_code == 429 or resp.status_code >= 500:
-        raise ProviderTransientError(f"{provider_id} rate limit or server error ({resp.status_code}).", resp.status_code)
+        detail = redact_sensitive_text(resp.text[:250])
+        raise ProviderTransientError(f"{provider_id} error ({resp.status_code}): {detail}", resp.status_code)
     if resp.status_code >= 400:
         raise SpecValidationError(f"{provider_id} rejected request ({resp.status_code}): {redact_sensitive_text(resp.text[:250])}")
 
@@ -364,7 +365,8 @@ class GeminiAdapter(AIProviderAdapter):
         if resp.status_code in {401, 403}:
             raise ProviderAuthError(f"Gemini authentication failed ({resp.status_code}).", resp.status_code)
         if resp.status_code == 429 or resp.status_code >= 500:
-            raise ProviderTransientError(f"Gemini error ({resp.status_code}).", resp.status_code)
+            detail = redact_sensitive_text(resp.text[:250])
+            raise ProviderTransientError(f"Gemini error ({resp.status_code}): {detail}", resp.status_code)
         if resp.status_code >= 400:
             raise SpecValidationError(f"Gemini rejected request ({resp.status_code}): {redact_sensitive_text(resp.text[:250])}")
         data = resp.json()
@@ -945,29 +947,40 @@ class AIRouter:
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": message})
 
-        try:
-            res = await adapter.chat_completion(key, eff_model, messages)
-            await self._record_usage_event(
-                provider_id=provider_id,
-                model_id=eff_model,
-                request_type="chat",
-                token_usage=res.get("usage"),
-                status_code=200,
-                latency_ms=res["latency_ms"],
-                correlation_id=correlation_id,
-            )
-            return {
-                "correlation_id": correlation_id,
-                "provider_id": provider_id,
-                "model_id": eff_model,
-                "reply": res["reply"],
-                "latency_ms": res["latency_ms"],
-                "usage": res.get("usage"),
-            }
-        except ProviderAuthError as exc:
-            await self._record_provider_error(provider_id, "auth_error", str(exc.status_code), str(exc), open_circuit=False)
-            raise
-        except ProviderTransientError as exc:
-            state = "rate_limited" if exc.status_code == 429 else "degraded"
-            await self._record_provider_error(provider_id, state, str(exc.status_code or "503"), str(exc), open_circuit=True)
-            raise RuntimeError(str(exc)) from exc
+        res = None
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                res = await adapter.chat_completion(key, eff_model, messages)
+                break
+            except ProviderAuthError as exc:
+                await self._record_provider_error(provider_id, "auth_error", str(exc.status_code), str(exc), open_circuit=False)
+                raise
+            except ProviderTransientError as exc:
+                last_exc = exc
+                if attempt == 0 and exc.status_code in {500, 502, 503, 504}:
+                    await asyncio.sleep(0.5)
+                    continue
+                state = "rate_limited" if exc.status_code == 429 else "degraded"
+                await self._record_provider_error(provider_id, state, str(exc.status_code or "503"), str(exc), open_circuit=True)
+                raise RuntimeError(str(exc)) from exc
+        if res is None:
+            raise RuntimeError(str(last_exc or "AI chat failed."))
+
+        await self._record_usage_event(
+            provider_id=provider_id,
+            model_id=eff_model,
+            request_type="chat",
+            token_usage=res.get("usage"),
+            status_code=200,
+            latency_ms=res["latency_ms"],
+            correlation_id=correlation_id,
+        )
+        return {
+            "correlation_id": correlation_id,
+            "provider_id": provider_id,
+            "model_id": eff_model,
+            "reply": res["reply"],
+            "latency_ms": res["latency_ms"],
+            "usage": res.get("usage"),
+        }

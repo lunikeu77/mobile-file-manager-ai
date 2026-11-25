@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Cloud, HardDrive, Search, Trash2, Upload, FileEdit, Minimize2 } from "lucide-react";
+import { Cloud, CloudUpload, HardDrive, Search, Trash2, Upload, FileEdit, Minimize2 } from "lucide-react";
 import { api, formatBytes } from "../api/client";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileItem } from "../types";
@@ -70,8 +70,13 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
     setLoading(true);
     setError(null);
     try {
-      await api.uploadFile(file);
-      setInfo(`업로드 완료: ${file.name}`);
+      const uploaded = await api.uploadFile(file);
+      if (source === "google_drive") {
+        const res = await api.uploadToDrive(uploaded.file_id);
+        setInfo(`Google Drive 업로드 완료: ${file.name} (ID: ${res.drive_file?.id})`);
+      } else {
+        setInfo(`로컬 워크스페이스 업로드 완료: ${file.name}`);
+      }
       await loadFiles();
       onRefreshSystem();
     } catch (err: any) {
@@ -140,7 +145,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
 
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500">
           <Upload className="h-4 w-4" />
-          파일 업로드
+          {source === "google_drive" ? "PC → Google Drive 바로 업로드" : "파일 업로드 (로컬)"}
           <input type="file" className="hidden" onChange={handleUpload} />
         </label>
       </div>
@@ -284,6 +289,24 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
               >
                 <FileEdit className="h-3.5 w-3.5" />
               </button>
+              {source === "local" && (
+                <button
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      const res = await api.uploadToDrive(f.file_id);
+                      setInfo(`Google Drive 업로드 완료: ${f.name} (ID: ${res.drive_file?.id})`);
+                    } catch (e: any) {
+                      setError(e.message);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
+                  title="Google Drive 전용 폴더로 업로드"
+                >
+                  <CloudUpload className="h-3.5 w-3.5" />
+                  Drive 업로드
+                </button>
+              )}
               {source === "local" && (f.name.toLowerCase().endsWith(".mp4") || f.name.toLowerCase().endsWith(".pdf")) && (
                 <button
                   onClick={() => onOpenCompression(f)}

@@ -21,8 +21,8 @@ const PROVIDER_CARDS: Array<{
   {
     id: "openrouter",
     label: "1. OpenRouter",
-    defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
-    presets: ["meta-llama/llama-3.3-70b-instruct:free", "openai/gpt-4o-mini"],
+    defaultModel: "openrouter/free",
+    presets: ["openrouter/free", "meta-llama/llama-3.3-70b-instruct", "openai/gpt-4o-mini"],
   },
   {
     id: "gemini",
